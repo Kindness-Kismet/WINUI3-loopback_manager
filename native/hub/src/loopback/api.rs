@@ -111,6 +111,15 @@ unsafe fn compare_sids(sid1: *mut SID, sid2: *mut SID) -> bool {
 }
 
 #[cfg(windows)]
+unsafe fn bytes_to_sid(bytes: &[u8]) -> Option<*mut SID> {
+    if bytes.len() < 8 {
+        return None;
+    }
+    
+    Some(bytes.as_ptr() as *mut SID)
+}
+
+#[cfg(windows)]
 pub fn enumerate_app_containers() -> Result<Vec<AppContainer>, String> {
     unsafe {
         log::info!("开始枚举应用容器");
@@ -171,6 +180,57 @@ pub fn enumerate_app_containers() -> Result<Vec<AppContainer>, String> {
 
         log::info!("成功枚举 {} 个应用容器", result_containers.len());
         Ok(result_containers)
+    }
+}
+
+#[cfg(windows)]
+pub fn set_loopback_exemption_by_sid(sid_bytes: &[u8], enabled: bool) -> Result<(), String> {
+    unsafe {
+        let sid_string = sid_to_string(bytes_to_sid(sid_bytes).ok_or("Invalid SID bytes")?);
+        log::info!("设置回环豁免 (SID: {}): {}", sid_string, enabled);
+        
+        let target_sid = bytes_to_sid(sid_bytes).ok_or("Invalid SID bytes")?;
+
+        let mut loopback_count: u32 = 0;
+        let mut loopback_sids: *mut SID_AND_ATTRIBUTES = ptr::null_mut();
+        let _ = NetworkIsolationGetAppContainerConfig(&mut loopback_count, &mut loopback_sids);
+
+        let loopback_slice = if loopback_count > 0 && !loopback_sids.is_null() {
+            std::slice::from_raw_parts(loopback_sids, loopback_count as usize)
+        } else {
+            &[]
+        };
+
+        let mut new_sids: Vec<SID_AND_ATTRIBUTES> = loopback_slice
+            .iter()
+            .filter(|item| !compare_sids(item.Sid.0 as *mut SID, target_sid))
+            .copied()
+            .collect();
+
+        if enabled {
+            new_sids.push(SID_AND_ATTRIBUTES {
+                Sid: PSID(target_sid as *mut _),
+                Attributes: 0,
+            });
+        }
+
+        let result = if new_sids.is_empty() {
+            NetworkIsolationSetAppContainerConfig(&[])
+        } else {
+            NetworkIsolationSetAppContainerConfig(&new_sids)
+        };
+
+        if !loopback_sids.is_null() {
+            let _ = LocalFree(HLOCAL(loopback_sids as *mut _));
+        }
+
+        if result == 0 {
+            log::info!("回环豁免设置成功 (SID: {})", sid_string);
+            Ok(())
+        } else {
+            log::error!("回环豁免设置失败 (SID: {}): {}", sid_string, result);
+            Err(format!("Failed to set loopback exemption: {}", result))
+        }
     }
 }
 
@@ -259,5 +319,10 @@ pub fn enumerate_app_containers() -> Result<Vec<AppContainer>, String> {
 
 #[cfg(not(windows))]
 pub fn set_loopback_exemption(_package_family_name: &str, _enabled: bool) -> Result<(), String> {
+    Err("This function is only available on Windows".to_string())
+}
+
+#[cfg(not(windows))]
+pub fn set_loopback_exemption_by_sid(_sid_bytes: &[u8], _enabled: bool) -> Result<(), String> {
     Err("This function is only available on Windows".to_string())
 }

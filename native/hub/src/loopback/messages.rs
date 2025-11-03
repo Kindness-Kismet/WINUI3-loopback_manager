@@ -15,20 +15,20 @@ pub struct SetLoopback {
     pub enabled: bool,
 }
 
-/// Dart → Rust：保存配置
+/// Dart → Rust：保存配置（使用 SID 字符串）
 #[derive(Deserialize, DartSignal)]
 pub struct SaveConfiguration {
-    pub package_family_names: Vec<String>,
+    pub sid_strings: Vec<String>,
 }
 
 /// Rust → Dart：应用容器列表
-#[derive(Serialize, Deserialize, RustSignal)]
+#[derive(Serialize, RustSignal)]
 pub struct AppContainersList {
     pub containers: Vec<String>,
 }
 
 /// Rust → Dart：单个应用容器信息
-#[derive(Serialize, Deserialize, RustSignal)]
+#[derive(Serialize, RustSignal)]
 pub struct AppContainerInfo {
     pub app_container_name: String,
     pub display_name: String,
@@ -39,14 +39,14 @@ pub struct AppContainerInfo {
 }
 
 /// Rust → Dart：设置回环豁免结果
-#[derive(Serialize, Deserialize, RustSignal)]
+#[derive(Serialize, RustSignal)]
 pub struct SetLoopbackResult {
     pub success: bool,
     pub message: String,
 }
 
 /// Rust → Dart：保存配置结果
-#[derive(Serialize, Deserialize, RustSignal)]
+#[derive(Serialize, RustSignal)]
 pub struct SaveConfigurationResult {
     pub success: bool,
     pub message: String,
@@ -110,10 +110,9 @@ impl SetLoopback {
 
 impl SaveConfiguration {
     pub fn handle(self) {
-        log::info!(
-            "处理保存配置请求，启用 {} 个包",
-            self.package_family_names.len()
-        );
+        log::info!("处理保存配置请求，期望启用 {} 个容器", self.sid_strings.len());
+
+        // 获取所有容器
         let containers = match api::enumerate_app_containers() {
             Ok(c) => c,
             Err(e) => {
@@ -128,33 +127,47 @@ impl SaveConfiguration {
         };
 
         let mut errors = Vec::new();
+        let mut success_count = 0;
+
+        // 对每个容器，检查是否应该启用
         for container in containers {
-            let should_enable = self
-                .package_family_names
-                .contains(&container.package_family_name);
+            let should_enable = self.sid_strings.contains(&container.sid_string);
 
             if container.is_loopback_enabled != should_enable {
-                if let Err(e) =
-                    api::set_loopback_exemption(&container.package_family_name, should_enable)
-                {
-                    log::error!("设置 {} 失败: {}", container.package_family_name, e);
-                    errors.push(format!("{}: {}", container.package_family_name, e));
+                log::info!(
+                    "修改容器: {} (SID: {}) | {} -> {}",
+                    container.display_name,
+                    container.sid_string,
+                    container.is_loopback_enabled,
+                    should_enable
+                );
+
+                if let Err(e) = api::set_loopback_exemption_by_sid(&container.sid, should_enable) {
+                    log::error!("设置容器失败: {}", e);
+                    errors.push(format!("{}: {}", container.display_name, e));
+                } else {
+                    success_count += 1;
                 }
             }
         }
 
+        log::info!("配置保存完成 | 修改: {} | 错误: {}", success_count, errors.len());
+
         if errors.is_empty() {
-            log::info!("配置保存成功");
             SaveConfigurationResult {
                 success: true,
-                message: "配置保存成功".to_string(),
+                message: format!("配置保存成功 (修改: {} 个容器)", success_count),
             }
             .send_signal_to_dart();
         } else {
-            log::warn!("配置保存部分失败: {} 个错误", errors.len());
             SaveConfigurationResult {
                 success: false,
-                message: format!("部分操作失败:\n{}", errors.join("\n")),
+                message: format!(
+                    "部分操作失败 (成功: {}, 失败: {}):\n{}",
+                    success_count,
+                    errors.len(),
+                    errors.join("\n")
+                ),
             }
             .send_signal_to_dart();
         }

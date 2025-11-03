@@ -182,18 +182,33 @@ class AppProvider extends ChangeNotifier {
   /// 
   /// [index] 容器在过滤列表中的索引
   void toggleContainerStatus(int index) {
+    if (index < 0 || index >= _filteredContainers.length) {
+      Logger.error('无效的容器索引: $index');
+      return;
+    }
+    
     final container = _filteredContainers[index];
-    final originalIndex = _containers.indexWhere(
-      (c) => c.packageFamilyName == container.packageFamilyName,
-    );
+    
+    // 使用 appContainerSid 作为唯一标识符，如果为空则使用 packageFamilyName + appContainerName
+    final originalIndex = _containers.indexWhere((c) {
+      if (container.appContainerSid.isNotEmpty && c.appContainerSid.isNotEmpty) {
+        return c.appContainerSid == container.appContainerSid;
+      }
+      // 备用方案：使用 packageFamilyName + appContainerName 组合
+      return c.packageFamilyName == container.packageFamilyName &&
+             c.appContainerName == container.appContainerName;
+    });
     
     if (originalIndex != -1) {
+      final newStatus = !container.isLoopbackEnabled;
       _containers[originalIndex] = container.copyWith(
-        isLoopbackEnabled: !container.isLoopbackEnabled,
+        isLoopbackEnabled: newStatus,
       );
-      Logger.debug('已切换 ${container.displayName}: ${!container.isLoopbackEnabled}');
+      Logger.debug('已切换 ${container.displayName} (SID: ${container.appContainerSid}): $newStatus');
       _applyFilters();
       notifyListeners();
+    } else {
+      Logger.error('未找到容器: ${container.displayName} (SID: ${container.appContainerSid})');
     }
   }
 

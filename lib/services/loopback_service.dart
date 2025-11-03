@@ -112,21 +112,23 @@ class LoopbackService {
 
   /// 设置回环豁免配置
   /// 
-  /// 将选中的应用容器列表发送到 Rust 后端，保存回环豁免配置
+  /// 将已启用容器的 SID 字符串列表发送到 Rust 后端保存
   /// 
-  /// [containers] 所有容器列表（包含启用状态）
+  /// [containers] 所有容器列表（包含 SID 和启用状态）
   /// 返回 true 表示保存成功，false 表示失败
   Future<bool> setLoopbackExemption(List<AppContainer> containers) async {
-    // 筛选出已启用回环豁免的包
-    final enabledPackages = containers
-        .where((c) => c.isLoopbackEnabled)
-        .map((c) => c.packageFamilyName)
+    Logger.info('Saving configuration for ${containers.length} containers');
+    
+    // 筛选出已启用的容器的 SID 字符串
+    final enabledSidStrings = containers
+        .where((c) => c.isLoopbackEnabled && c.appContainerSid.isNotEmpty)
+        .map((c) => c.appContainerSid)
         .toList();
 
-    Logger.info('Saving configuration for ${enabledPackages.length} enabled packages');
+    Logger.info('Sending ${enabledSidStrings.length} enabled SIDs to Rust');
     
     // 发送保存配置信号到 Rust
-    SaveConfiguration(packageFamilyNames: enabledPackages).sendSignalToRust();
+    SaveConfiguration(sidStrings: enabledSidStrings).sendSignalToRust();
     
     // 等待保存结果
     final result = await saveResultStream.first;
