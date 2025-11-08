@@ -62,8 +62,12 @@ jobs:
           git config user.name "github-actions[bot]"
           git config user.email "github-actions[bot]@users.noreply.github.com"
           git add .
-          git commit -m "chore(deps): 自动更新 Flutter 与 Rust 依赖"
-          git push
+          if git diff --cached --quiet; then
+            echo "✅ 没有实际变更，跳过提交。"
+          else
+            git commit -m "chore(deps): 自动更新 Flutter 与 Rust 依赖"
+            git push
+          fi
 
       - name: 无需更新
         if: steps.check_deps.outputs.has_changes == 'false'
