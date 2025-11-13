@@ -19,8 +19,10 @@ jobs:
         include:
           - arch: x64
             runs-on: windows-latest
+            rust-target: x86_64-pc-windows-msvc
           - arch: arm64
-            runs-on: windows-11-arm  # GitHub 提供 ARM runner
+            runs-on: windows-11-arm
+            rust-target: aarch64-pc-windows-msvc
     runs-on: ${{ matrix.runs-on }}
 
     steps:
@@ -37,10 +39,8 @@ jobs:
 
       - name: 配置 Rust
         uses: dtolnay/rust-toolchain@stable
-
-      - name: 设置 Rust 目标（ARM64）
-        if: matrix.arch == 'arm64'
-        run: rustup target add aarch64-pc-windows-msvc
+        with:
+          targets: ${{ matrix.rust-target }}
 
       - name: 安装 Flutter 依赖
         run: flutter pub get
