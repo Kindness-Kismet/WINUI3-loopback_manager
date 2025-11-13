@@ -54,7 +54,10 @@ jobs:
         run: dart run slang
 
       - name: 构建 Windows 版本
-        run: flutter build windows --release
+        run: flutter build windows --release -v
+        env:
+          CARGO_BUILD_TARGET: ${{ matrix.rust-target }}
+          FLUTTER_TARGET_PLATFORM: ${{ matrix.arch == 'arm64' && 'windows' || format('windows-{0}', matrix.arch) }}
 
       - name: 生成版本标签
         id: tag
