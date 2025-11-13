@@ -52,6 +52,13 @@ add_subdirectory(${FLUTTER_MANAGED_DIR})
 # Application build; see runner/CMakeLists.txt.
 add_subdirectory("runner")
 
+# Workaround: Cargokit doesn't support windows-arm64 yet, so we need to override it
+# This allows ARM64 builds to work by telling Cargokit it's a regular "windows" build
+# while Cargo still uses the correct aarch64-pc-windows-msvc target via CARGO_BUILD_TARGET
+if(FLUTTER_TARGET_PLATFORM STREQUAL "windows-arm64")
+  set(FLUTTER_TARGET_PLATFORM "windows")
+  message(STATUS "Overriding FLUTTER_TARGET_PLATFORM from windows-arm64 to windows for Cargokit compatibility")
+endif()
 
 # Generated plugin build rules, which manage building the plugins and adding
 # them to the application.
