@@ -400,10 +400,11 @@ packages:
   rinf:
     dependency: "direct main"
     description:
-      name: rinf
-      sha256: "7c9ff632a90747ad8a83f072e032826876230f44034aceb40774d744b033b199"
-      url: "https://pub.dev"
-    source: hosted
+      path: flutter_package
+      ref: "6ae953f3"
+      resolved-ref: "6ae953f3031c6b10fcf9117de2071b6b66a85290"
+      url: "https://github.com/ONEUI8/rinf-mod.git"
+    source: git
     version: "8.7.2"
   screen_retriever:
     dependency: transitive
