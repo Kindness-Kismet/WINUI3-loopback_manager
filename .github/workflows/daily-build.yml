@@ -12,7 +12,7 @@ permissions:
   contents: write
 
 jobs:
-  # ------------ 提前准备（读取包名 & 生成 tag） ------------
+  # ------------ 提前准备（读取包名 & 生成 tag & 读取版本号） ------------
   prepare:
     name: 准备构建信息
     runs-on: ubuntu-latest
@@ -20,6 +20,7 @@ jobs:
       tag: ${{ steps.tag.outputs.tag }}
       datetime: ${{ steps.tag.outputs.datetime }}
       pkg: ${{ steps.pkg.outputs.pkg }}
+      version: ${{ steps.ver.outputs.version }}
 
     steps:
       - name: 检出代码
@@ -29,18 +30,32 @@ jobs:
         id: pkg
         run: |
           pkg=$(grep '^name:' pubspec.yaml | awk '{print $2}')
+          echo "🔍 检测到包名: $pkg"
           if [ -z "$pkg" ]; then
-            echo "Cannot find package name in pubspec.yaml" >&2
+            echo "::error::无法从 pubspec.yaml 找到包名"
             exit 1
           fi
           echo "pkg=$pkg" >> $GITHUB_OUTPUT
 
+      - name: 读取 pubspec.yaml 版本号
+        id: ver
+        run: |
+          version=$(grep '^version:' pubspec.yaml | awk '{print $2}')
+          echo "📦 应用版本号: $version"
+          if [ -z "$version" ]; then
+            echo "::warning::无法从 pubspec.yaml 找到 version 字段"
+          fi
+          echo "version=$version" >> $GITHUB_OUTPUT
+
       - name: 生成版本标签
         id: tag
         run: |
-          datetime=$(date -u +"%Y.%m.%d.%H.%M")
-          echo "tag=v${datetime}" >> $GITHUB_OUTPUT
-          echo "datetime=${datetime}" >> $GITHUB_OUTPUT
+          datetime=$(date -u +"%Y%m%d%H%M")
+          tag="v${datetime}"
+          echo "⏱️ 构建时间: $datetime"
+          echo "🏷️ 版本标签: $tag"
+          echo "tag=$tag" >> $GITHUB_OUTPUT
+          echo "datetime=$datetime" >> $GITHUB_OUTPUT
 
   # ------------ 构建 job（依赖 prepare） ------------
   build:
@@ -58,6 +73,17 @@ jobs:
     steps:
       - name: 检出代码
         uses: actions/checkout@v5
+
+      - name: 输出构建信息（Debug）
+        shell: pwsh
+        run: |
+          Write-Host "============================================"
+          Write-Host "📦 包名:        ${{ needs.prepare.outputs.pkg }}"
+          Write-Host "⏫ 版本号:      ${{ needs.prepare.outputs.version }}"
+          Write-Host "🏷️ Tag:         ${{ needs.prepare.outputs.tag }}"
+          Write-Host "🕒 时间:        ${{ needs.prepare.outputs.datetime }}"
+          Write-Host "🖥️ 架构:        ${{ matrix.arch }}"
+          Write-Host "============================================"
 
       - name: 配置 Flutter
         uses: subosito/flutter-action@v2
@@ -96,29 +122,29 @@ jobs:
           $tag = $env:TAG
           $arch = $env:ARCH
 
+          Write-Host "🔧 打包：包名=$pkg  Tag=$tag 架构=$arch"
+
           $releaseZip = "${pkg}-windows-${tag}-${arch}.zip"
           $debugZip   = "${pkg}-windows-${tag}-${arch}-debug.zip"
 
-          # Release
           Compress-Archive -Path "build/windows/$arch/runner/Release/*" `
             -DestinationPath "dist/$releaseZip"
 
-          # Debug
           Compress-Archive -Path "build/windows/$arch/runner/Debug/*" `
             -DestinationPath "dist/$debugZip"
 
-          Write-Host "Generated: dist\$releaseZip"
-          Write-Host "Generated: dist\$debugZip"
+          Write-Host "📦 产物文件:"
+          Write-Host " - dist/$releaseZip"
+          Write-Host " - dist/$debugZip"
 
       - name: 上传构建产物
         uses: actions/upload-artifact@v4
         with:
-          # artifact 名称包含包名 / arch / tag，便于区分
           name: ${{ needs.prepare.outputs.pkg }}-windows-${{ matrix.arch }}-${{ needs.prepare.outputs.tag }}
           path: dist/*.zip
           retention-days: 7
 
-  # ------------ Release（使用 prepare 输出的 tag & pkg） ------------
+  # ------------ Release（上传到发布页） ------------
   release:
     name: 发布 Release（自动上传产物）
     needs: [prepare, build]
@@ -128,7 +154,7 @@ jobs:
       - name: 检出代码
         uses: actions/checkout@v5
 
-      - name: 下载所有构建产物
+      - name: 下载构建产物
         uses: actions/download-artifact@v4
         with:
           path: artifacts
@@ -136,13 +162,13 @@ jobs:
       - name: 发布构建产物到 Release
         uses: softprops/action-gh-release@v1
         with:
-          # 使用提前生成的 tag（softprops 会在必要时创建该 tag）
           tag_name: ${{ needs.prepare.outputs.tag }}
           name: 日常构建 ${{ needs.prepare.outputs.datetime }}
           body: |
             ## 🚀 日常自动构建
 
             **包名**: `${{ needs.prepare.outputs.pkg }}`
+            **应用版本**: `${{ needs.prepare.outputs.version }}`
             **构建时间**: ${{ needs.prepare.outputs.datetime }}
             **提交哈希**: ${{ github.sha }}
 
