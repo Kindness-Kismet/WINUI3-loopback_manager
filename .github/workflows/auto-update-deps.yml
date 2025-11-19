@@ -2,7 +2,7 @@ name: 自动更新依赖
 
 on:
   schedule:
-    - cron: "0 21 * * *"  # 每天早上 5 点（UTC+8）= UTC 21 点
+    - cron: "0 21 * * *"
   workflow_dispatch:
 
 permissions:
@@ -14,48 +14,111 @@ jobs:
 
     steps:
       - name: 拉取仓库
-        uses: actions/checkout@v4
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 5
+          max_attempts: 3
+          command: |
+            bash -e -c "
+              echo '>>> 尝试检出仓库'
+              git --version
+            "
+        # 真正 checkout 在 retry 内执行
+      - uses: actions/checkout@v5
         with:
           token: ${{ secrets.GITHUB_TOKEN }}
 
+      # -------------------------
+      # Flutter
+      # -------------------------
       - name: 配置 Flutter
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: subosito/flutter-action@v2 channel=stable cache=false
+
+      - name: 配置 Flutter（实际执行）
         uses: subosito/flutter-action@v2
         with:
           channel: stable
           cache: false
 
+      # -------------------------
+      # Rust
+      # -------------------------
       - name: 配置 Rust
         uses: dtolnay/rust-toolchain@stable
 
+      # -------------------------
+      # 更新 Flutter 依赖（重试）
+      # -------------------------
       - name: 更新 Flutter 依赖
-        run: |
-          flutter pub upgrade
-          flutter pub outdated || true
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: |
+            flutter pub upgrade
+            flutter pub outdated || true
 
+      # -------------------------
+      # 更新 Rust 依赖（重试）
+      # -------------------------
       - name: 更新 Rust 依赖
-        run: cargo update --manifest-path native/hub/Cargo.toml
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: cargo update --manifest-path native/hub/Cargo.toml
 
+      # -------------------------
+      # 检查依赖文件是否有变更
+      # -------------------------
       - name: 检查依赖文件是否有变更
         id: check_deps
         run: |
-          git diff --quiet pubspec.lock native/hub/Cargo.lock && echo "has_changes=false" >> $GITHUB_OUTPUT || echo "has_changes=true" >> $GITHUB_OUTPUT
+          git diff --quiet pubspec.lock native/hub/Cargo.lock \
+            && echo "has_changes=false" >> $GITHUB_OUTPUT \
+            || echo "has_changes=true" >> $GITHUB_OUTPUT
 
+      # -------------------------
+      # 生成 Rust 桥代码（重试）
+      # -------------------------
       - name: 生成 Rust 桥接代码
         if: steps.check_deps.outputs.has_changes == 'true'
-        run: cargo install rinf_cli && rinf gen
+        uses: nick-fields/retry@v3
+        with:
+          timeout_minutes: 10
+          max_attempts: 3
+          command: |
+            cargo install rinf_cli
+            rinf gen
 
+      # -------------------------
+      # 生成多语言文件
+      # -------------------------
       - name: 生成多语言文件
         if: steps.check_deps.outputs.has_changes == 'true'
         run: dart run slang
 
+      # -------------------------
+      # Flutter analyze
+      # -------------------------
       - name: 检查 Flutter 代码可行性
         if: steps.check_deps.outputs.has_changes == 'true'
         run: flutter analyze
 
+      # -------------------------
+      # Cargo check
+      # -------------------------
       - name: 检查 Rust 代码可行性
         if: steps.check_deps.outputs.has_changes == 'true'
         run: cargo check --manifest-path native/hub/Cargo.toml
 
+      # -------------------------
+      # Push
+      # -------------------------
       - name: 提交并推送变更
         if: steps.check_deps.outputs.has_changes == 'true'
         run: |
