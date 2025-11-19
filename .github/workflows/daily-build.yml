@@ -3,7 +3,7 @@ name: 日常构建
 on:
   push:
     branches:
-      - main
+      - '**'
   schedule:
     - cron: "0 0 * * *"
   workflow_dispatch:
@@ -13,7 +13,7 @@ permissions:
 
 jobs:
   build:
-    name: Windows 构建 ${{ matrix.arch }}
+    name: 构建 Windows-${{ matrix.arch }}
     strategy:
       matrix:
         include:
@@ -55,7 +55,6 @@ jobs:
         shell: pwsh
         run: |
           New-Item -ItemType Directory -Force -Path dist | Out-Null
-
           $arch = "${{ matrix.arch }}"
 
           Compress-Archive `
@@ -74,7 +73,7 @@ jobs:
           retention-days: 90
 
   release:
-    name: 创建 GitHub Release
+    name: 发布 Release（自动上传产物）
     runs-on: ubuntu-latest
     needs: build
 
@@ -85,6 +84,12 @@ jobs:
         with:
           path: artifacts
 
+      - name: 读取 pubspec.yaml 包名
+        id: pkg
+        run: |
+          pkg=$(grep '^name:' pubspec.yaml | awk '{print $2}')
+          echo "pkg=$pkg" >> $GITHUB_OUTPUT
+
       - name: 生成版本标签
         id: tag
         run: |
@@ -92,7 +97,7 @@ jobs:
           echo "tag=v${datetime}" >> $GITHUB_OUTPUT
           echo "datetime=${datetime}" >> $GITHUB_OUTPUT
 
-      - name: 发布到 GitHub Release
+      - name: 发布构建产物到 Release
         uses: softprops/action-gh-release@v1
         with:
           tag_name: ${{ steps.tag.outputs.tag }}
@@ -100,19 +105,10 @@ jobs:
           body: |
             ## 🚀 日常自动构建
 
+            **包名**: `${{ steps.pkg.outputs.pkg }}`
             **构建时间**: ${{ steps.tag.outputs.datetime }}
             **提交哈希**: ${{ github.sha }}
 
-            ### 📦 下载
-            - Windows x64 Release
-            - Windows x64 Debug
-            - Windows ARM64 Release
-            - Windows ARM64 Debug
-
-            ⚠️ 这是自动构建版本，可能包含未充分测试的功能。
-
-            ---
-            自动生成于 GitHub Actions
           files: artifacts/**/*.zip
           prerelease: true
           overwrite: true
