@@ -32,13 +32,6 @@ jobs:
       # Flutter
       # -------------------------
       - name: 配置 Flutter
-        uses: nick-fields/retry@v3
-        with:
-          timeout_minutes: 10
-          max_attempts: 3
-          command: subosito/flutter-action@v2 channel=stable cache=false
-
-      - name: 配置 Flutter（实际执行）
         uses: subosito/flutter-action@v2
         with:
           channel: stable
