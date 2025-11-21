@@ -204,9 +204,15 @@ jobs:
         run: |
           echo "📝 正在生成更新日志..."
           
-          # 获取上一个正式版 tag
-          previous_tag=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' | head -n 2 | tail -n 1)
-          current_tag="${{ needs.prepare.outputs.tag }}"
+          # 获取所有正式版 tag（排除当前 tag）
+          all_release_tags=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
+          
+          echo "🔍 所有正式版 tag:"
+          echo "$all_release_tags"
+          echo ""
+          
+          # 排除当前 tag，获取上一个正式版
+          previous_tag=$(echo "$all_release_tags" | grep -v "^${current_tag}$" | head -n 1)
           
           if [ -z "$previous_tag" ]; then
             echo "⚠️  未找到上一个版本 tag，使用首个提交"
