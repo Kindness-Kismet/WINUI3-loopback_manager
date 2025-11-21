@@ -1,11 +1,12 @@
-name: 日常构建
+name: Beta 构建
 
 on:
   push:
     branches:
       - '**'
-  schedule:
-    - cron: "0 0 * * *"
+  pull_request:
+    branches:
+      - '**'
   workflow_dispatch:
 
 permissions:
@@ -24,7 +25,7 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
       - name: 读取 pubspec.yaml 包名
         id: pkg
@@ -79,9 +80,9 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
 
-      - name: 输出构建信息（Debug）
+      - name: 输出构建信息
         shell: pwsh
         run: |
           Write-Host "============================================"
@@ -100,20 +101,37 @@ jobs:
       - name: 配置 Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: 安装 Flutter 依赖
-        run: flutter pub get
+      - name: 安装项目依赖
+        shell: pwsh
+        run: |
+          Write-Host "📦 正在安装项目依赖..."
+          
+          Write-Host "  ➤ 安装 Flutter 主项目依赖"
+          flutter pub get
+          
+          Write-Host "  ➤ 安装 rinf_cli"
+          cargo install rinf_cli
+          
+          Write-Host "✅ 所有依赖安装完成"
+
+      - name: 运行预构建脚本
+        shell: pwsh
+        run: |
+          Write-Host "🔧 正在运行预构建脚本..."
+          dart run scripts/prebuild.dart
 
       - name: 生成 Rust 桥接代码
-        run: |
-          cargo install rinf_cli
-          rinf gen
+        run: rinf gen
 
       - name: 生成多语言文件
         run: dart run slang
 
       - name: 构建应用程序
+        shell: pwsh
         run: |
+          Write-Host "🏗️ 正在构建 Release 版本..."
           flutter build windows --release -v
+          Write-Host "🏗️ 正在构建 Debug 版本..."
           flutter build windows --debug -v
 
       - name: 打包构建产物
@@ -151,7 +169,7 @@ jobs:
           path: dist/*.zip
           retention-days: 7
 
-  # ------------ Release（上传到发布页） ------------
+  # ------------ 上传到发布页 ------------
   release:
     name: 发布构建
     needs: [prepare, build]
@@ -159,7 +177,25 @@ jobs:
 
     steps:
       - name: 检出代码
-        uses: actions/checkout@v5
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: 获取提交信息
+        id: commit
+        run: |
+          # 获取提交消息
+          commit_msg=$(git log -1 --pretty=format:"%s")
+          commit_author=$(git log -1 --pretty=format:"%an")
+          commit_date=$(git log -1 --pretty=format:"%ci")
+          
+          # 转义换行符和特殊字符
+          commit_msg="${commit_msg//$'\n'/'%0A'}"
+          commit_msg="${commit_msg//$'\r'/'%0D'}"
+          
+          echo "message=$commit_msg" >> $GITHUB_OUTPUT
+          echo "author=$commit_author" >> $GITHUB_OUTPUT
+          echo "date=$commit_date" >> $GITHUB_OUTPUT
 
       - name: 下载构建产物
         uses: actions/download-artifact@v4
@@ -170,14 +206,35 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ needs.prepare.outputs.tag }}
-          name: 日常构建 ${{ needs.prepare.outputs.datetime }}
+          name: Beta ${{ needs.prepare.outputs.datetime }}
           body: |
-            ## 🚀 日常自动构建
-
-            **包名**: `${{ needs.prepare.outputs.pkg }}`
-            **应用版本**: `${{ needs.prepare.outputs.version }}`
-            **构建时间**: ${{ needs.prepare.outputs.datetime }}
-            **提交哈希**: ${{ github.sha }}
+            ## 🚀 Beta 测试版本
+            
+            > ⚠️ 这是自动构建的测试版本，可能存在未知问题，仅供测试使用。
+            
+            ### 📦 构建信息
+            
+            | 项目 | 内容 |
+            |------|------|
+            | **包名** | `${{ needs.prepare.outputs.pkg }}` |
+            | **应用版本** | `${{ needs.prepare.outputs.version }}` |
+            | **构建时间** | ${{ needs.prepare.outputs.datetime }} (UTC) |
+            | **提交哈希** | [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
+            
+            ### 📝 本次更新
+            
+            **提交者**: ${{ steps.commit.outputs.author }}
+            **提交时间**: ${{ steps.commit.outputs.date }}
+            **提交信息**: ${{ steps.commit.outputs.message }}
+            
+            ---
+            
+            ### 📥 下载说明
+            
+            - **Release**: 生产环境优化版本（推荐）
+            - **Debug**: 开发调试版本（包含调试信息）
+            
+            支持架构：`x64`, `arm64`
 
           files: artifacts/**/*.zip
           prerelease: true
