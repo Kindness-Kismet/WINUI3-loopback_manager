@@ -28,10 +28,13 @@ jobs:
       pkg: ${{ steps.pkg.outputs.pkg }}
       version: ${{ steps.ver.outputs.version }}
       tag: ${{ steps.tag.outputs.tag }}
+      changelog: ${{ steps.changelog.outputs.changelog }}
 
     steps:
       - name: 检出代码
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
 
       - name: 读取 pubspec.yaml 包名
         id: pkg
@@ -98,6 +101,94 @@ jobs:
           fi
           
           echo "✅ 版本号验证通过"
+
+      - name: 生成更新日志
+        id: changelog
+        run: |
+          echo "📝 正在生成更新日志..."
+          echo ""
+          
+          current_tag="${{ steps.tag.outputs.tag }}"
+          
+          # 获取所有正式版 tag（按版本号降序）
+          all_release_tags=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$' || true)
+          
+          # 排除当前 tag，获取上一个正式版
+          previous_tag=$(echo "$all_release_tags" | grep -v "^${current_tag}$" | head -n 1 || true)
+          
+          if [ -z "$previous_tag" ]; then
+            echo "⚠️  未找到上一个版本 tag，使用首个提交"
+            previous_tag=$(git rev-list --max-parents=0 HEAD)
+          fi
+          
+          echo "📍 版本范围: $previous_tag → $current_tag"
+          echo ""
+          
+          # 定义要忽略的提交模式
+          IGNORE_PATTERNS="^ci:|^ci\(|^chore\(ci\)|^chore\(workflow\)|^\[ci\]|^\[workflow\]|^workflow:|^github action|^update.*workflow|^fix.*workflow|^bump.*action"
+          
+          # 生成提交日志
+          {
+            echo "## 📋 更新日志"
+            echo ""
+            echo "自 $previous_tag 以来的功能和修复："
+            echo ""
+            echo "> 💡 已自动过滤 CI/Workflow 相关的维护性提交"
+            echo ""
+
+            # 获取所有提交并处理
+            total_count=0
+            filtered_count=0
+            included_count=0
+            
+            # 使用简单的方式获取提交信息，避免 null 字节问题
+            git log $previous_tag..HEAD --no-merges --pretty=format:"%H|%s|%an|%ar" | while IFS='|' read -r hash subject author time; do
+              total_count=$((total_count + 1))
+              
+              # 检查是否匹配忽略模式（不区分大小写）
+              if echo "$subject" | grep -qiE "$IGNORE_PATTERNS"; then
+                filtered_count=$((filtered_count + 1))
+                continue
+              fi
+              
+              included_count=$((included_count + 1))
+              
+              # 输出格式化的提交信息
+              echo "### $subject"
+              echo ""
+              echo "**提交**: \`${hash:0:7}\` | **作者**: $author | **时间**: $time"
+              echo ""
+              
+              # 获取提交正文（如果有的话）
+              body=$(git log -1 --pretty=format:"%b" "$hash" | sed '/^$/d')
+              if [ -n "$body" ]; then
+                echo "$body"
+                echo ""
+              fi
+              
+              echo "---"
+              echo ""
+            done
+            
+            echo "---"
+            echo ""
+            echo "**统计信息**"
+            echo "- 📊 总提交数: $(git rev-list $previous_tag..HEAD --no-merges --count)"
+            echo "- ✅ 功能/修复提交: $(git log $previous_tag..HEAD --no-merges --pretty=format:"%s" | grep -vicE "$IGNORE_PATTERNS" || echo "0")"
+            echo "- 🔧 CI/维护提交: $(git log $previous_tag..HEAD --no-merges --pretty=format:"%s" | grep -icE "$IGNORE_PATTERNS" || echo "0") (已过滤)"
+
+          } > changelog.md
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 生成的更新日志预览："
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          cat changelog.md
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
+          
+          # 输出到 GitHub Actions（使用 base64 编码避免特殊字符问题）
+          changelog_base64=$(base64 -w 0 changelog.md)
+          echo "changelog=$changelog_base64" >> $GITHUB_OUTPUT
 
   # ------------ 构建 job（依赖 prepare） ------------
   build:
@@ -201,129 +292,35 @@ jobs:
         with:
           fetch-depth: 0
 
-      - name: 生成更新日志
-        id: changelog
+      - name: 解码更新日志
+        id: decode_changelog
         run: |
-          echo "📝 正在生成更新日志..."
-          echo ""
+          echo "📝 正在解码更新日志..."
           
-          current_tag="${{ needs.prepare.outputs.tag }}"
+          # 从 prepare job 获取 base64 编码的更新日志
+          changelog_base64="${{ needs.prepare.outputs.changelog }}"
           
-          # 获取所有正式版 tag（按版本号降序）
-          all_release_tags=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
-          
-          # 排除当前 tag，获取上一个正式版
-          previous_tag=$(echo "$all_release_tags" | grep -v "^${current_tag}$" | head -n 1)
-          
-          if [ -z "$previous_tag" ]; then
-            echo "⚠️  未找到上一个版本 tag，使用首个提交"
-            previous_tag=$(git rev-list --max-parents=0 HEAD)
-          fi
-          
-          echo "📍 版本范围: $previous_tag → $current_tag"
-          echo ""
-          
-          # 定义要忽略的提交模式（支持正则表达式）
-          IGNORE_PATTERNS=(
-            "^ci:"           # CI 相关提交
-            "^ci\("          # CI(scope): 格式
-            "^chore\(ci\)"   # chore(ci): 格式
-            "^chore\(workflow\)"  # workflow 相关
-            "^\[ci\]"        # [ci] 开头
-            "^\[workflow\]"  # [workflow] 开头
-            "^workflow:"     # workflow: 开头
-            "^github action" # GitHub Actions 相关（去掉s以匹配单复数）
-            "^update[[:space:]].*workflow"  # 更新 workflow（使用[[:space:]]）
-            "^fix[[:space:]].*workflow" # 修复 workflow
-            "^bump[[:space:]].*action"  # 更新 action 版本
-          )
-          
-          # 生成提交日志（包含标题和正文，过滤特定提交）
-          {
-            echo "## 📋 更新日志"
-            echo ""
-            echo "自 $previous_tag 以来的功能和修复："
-            echo ""
-            echo "> 💡 已自动过滤 CI/Workflow 相关的维护性提交"
-            echo ""
-
-            # 构建 grep 排除模式
-            grep_pattern=""
-            for pattern in "${IGNORE_PATTERNS[@]}"; do
-              if [ -n "$grep_pattern" ]; then
-                grep_pattern="$grep_pattern\|$pattern"
-              else
-                grep_pattern="$pattern"
-              fi
-            done
-
-            # 获取所有提交哈希
-            commit_hashes=$(git rev-list $previous_tag..HEAD --no-merges)
+          if [ -n "$changelog_base64" ]; then
+            # 解码 base64
+            echo "$changelog_base64" | base64 -d > changelog.md
             
-            # 计数器
-            total_count=0
-            filtered_count=0
-            included_count=0
-            
-            # 遍历每个提交
-            for hash in $commit_hashes; do
-              total_count=$((total_count + 1))
-              
-              # 获取提交信息（使用%x00作为分隔符避免|字符冲突）
-              commit_info=$(git log -1 --pretty=format:"%s%x00%an%x00%ar%x00%b" "$hash")
-              
-              # 分割字段（使用null字符作为分隔符）
-              subject=$(echo "$commit_info" | cut -d$'\x00' -f1)
-              author=$(echo "$commit_info" | cut -d$'\x00' -f2)
-              time=$(echo "$commit_info" | cut -d$'\x00' -f3)
-              body=$(echo "$commit_info" | cut -d$'\x00' -f4-)
-              
-              # 检查是否匹配忽略模式（不区分大小写）
-              if echo "$subject" | grep -qiE "$grep_pattern"; then
-                filtered_count=$((filtered_count + 1))
-                continue
-              fi
-              
-              included_count=$((included_count + 1))
-              
-              # 输出格式化的提交信息
-              echo "### $subject"
-              echo ""
-              echo "**提交**: \`${hash:0:7}\` | **作者**: $author | **时间**: $time"
-              echo ""
-              
-              # 只在body非空且不只包含空白时输出
-              if [ -n "$(echo "$body" | tr -d '[:space:]')" ]; then
-                echo "$body"
-                echo ""
-              fi
-              
-              echo "---"
-              echo ""
-            done
-            
-            echo "---"
-            echo ""
-            echo "**统计信息**"
-            echo "- 📊 总提交数: $total_count"
-            echo "- ✅ 功能/修复提交: $included_count"
-            echo "- 🔧 CI/维护提交: $filtered_count (已过滤)"
-
-          } > changelog.md
-          
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo "📋 生成的更新日志预览："
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          cat changelog.md
-          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
-          echo ""
-          
-          # 输出到 GitHub Actions
-          {
-            echo 'changelog<<EOF'
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo "📋 解码的更新日志预览："
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
             cat changelog.md
-            echo EOF
-          } >> $GITHUB_OUTPUT
+            echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+            echo ""
+            
+            # 输出到 GitHub Actions
+            {
+              echo 'changelog<<EOF'
+              cat changelog.md
+              echo EOF
+            } >> $GITHUB_OUTPUT
+          else
+            echo "⚠️ 未找到更新日志，使用默认内容"
+            echo "changelog=## 📋 更新日志\n\n暂无更新日志信息。" >> $GITHUB_OUTPUT
+          fi
 
       - name: 下载构建产物
         uses: actions/download-artifact@v4
@@ -348,7 +345,7 @@ jobs:
             | **版本号** | `${{ needs.prepare.outputs.version }}` |
             | **提交哈希** | [`${{ github.sha }}`](${{ github.server_url }}/${{ github.repository }}/commit/${{ github.sha }}) |
             
-            ${{ steps.changelog.outputs.changelog }}
+            ${{ steps.decode_changelog.outputs.changelog }}
             
             ---
             
