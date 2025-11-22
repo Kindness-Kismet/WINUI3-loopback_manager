@@ -205,13 +205,12 @@ jobs:
         id: changelog
         run: |
           echo "📝 正在生成更新日志..."
-          
-          # 获取所有正式版 tag（排除当前 tag）
-          all_release_tags=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
-          
-          echo "🔍 所有正式版 tag:"
-          echo "$all_release_tags"
           echo ""
+          
+          current_tag="${{ needs.prepare.outputs.tag }}"
+          
+          # 获取所有正式版 tag（按版本号降序）
+          all_release_tags=$(git tag --sort=-version:refname | grep -E '^v[0-9]+\.[0-9]+\.[0-9]+$')
           
           # 排除当前 tag，获取上一个正式版
           previous_tag=$(echo "$all_release_tags" | grep -v "^${current_tag}$" | head -n 1)
@@ -222,27 +221,102 @@ jobs:
           fi
           
           echo "📍 版本范围: $previous_tag → $current_tag"
+          echo ""
           
-          # 生成提交日志（简单列表）
+          # 定义要忽略的提交模式（支持正则表达式）
+          IGNORE_PATTERNS=(
+            "^ci:"           # CI 相关提交
+            "^ci\("          # CI(scope): 格式
+            "^chore\(ci\)"   # chore(ci): 格式
+            "^chore\(workflow\)"  # workflow 相关
+            "^\[ci\]"        # [ci] 开头
+            "^\[workflow\]"  # [workflow] 开头
+            "^workflow:"     # workflow: 开头
+            "^github action" # GitHub Actions 相关（去掉s以匹配单复数）
+            "^update[[:space:]].*workflow"  # 更新 workflow（使用[[:space:]]）
+            "^fix[[:space:]].*workflow" # 修复 workflow
+            "^bump[[:space:]].*action"  # 更新 action 版本
+          )
+          
+          # 生成提交日志（包含标题和正文，过滤特定提交）
           {
             echo "## 📋 更新日志"
             echo ""
-            echo "自 $previous_tag 以来的所有提交："
+            echo "自 $previous_tag 以来的功能和修复："
             echo ""
-            
-            # 列出所有提交（包含完整信息）
-            git log $previous_tag..HEAD --no-merges --pretty=format:"### %s%n%n**提交**: \`%h\` | **作者**: %an | **时间**: %ar%n%n%b%n---" | sed '/^$/d'
-            
+            echo "> 💡 已自动过滤 CI/Workflow 相关的维护性提交"
             echo ""
-            echo ""
+
+            # 构建 grep 排除模式
+            grep_pattern=""
+            for pattern in "${IGNORE_PATTERNS[@]}"; do
+              if [ -n "$grep_pattern" ]; then
+                grep_pattern="$grep_pattern\|$pattern"
+              else
+                grep_pattern="$pattern"
+              fi
+            done
+
+            # 获取所有提交哈希
+            commit_hashes=$(git rev-list $previous_tag..HEAD --no-merges)
             
-            # 提交统计
-            commit_count=$(git rev-list --count $previous_tag..HEAD --no-merges)
+            # 计数器
+            total_count=0
+            filtered_count=0
+            included_count=0
+            
+            # 遍历每个提交
+            for hash in $commit_hashes; do
+              total_count=$((total_count + 1))
+              
+              # 获取提交信息（使用%x00作为分隔符避免|字符冲突）
+              commit_info=$(git log -1 --pretty=format:"%s%x00%an%x00%ar%x00%b" "$hash")
+              
+              # 分割字段（使用null字符作为分隔符）
+              subject=$(echo "$commit_info" | cut -d$'\x00' -f1)
+              author=$(echo "$commit_info" | cut -d$'\x00' -f2)
+              time=$(echo "$commit_info" | cut -d$'\x00' -f3)
+              body=$(echo "$commit_info" | cut -d$'\x00' -f4-)
+              
+              # 检查是否匹配忽略模式（不区分大小写）
+              if echo "$subject" | grep -qiE "$grep_pattern"; then
+                filtered_count=$((filtered_count + 1))
+                continue
+              fi
+              
+              included_count=$((included_count + 1))
+              
+              # 输出格式化的提交信息
+              echo "### $subject"
+              echo ""
+              echo "**提交**: \`${hash:0:7}\` | **作者**: $author | **时间**: $time"
+              echo ""
+              
+              # 只在body非空且不只包含空白时输出
+              if [ -n "$(echo "$body" | tr -d '[:space:]')" ]; then
+                echo "$body"
+                echo ""
+              fi
+              
+              echo "---"
+              echo ""
+            done
+            
             echo "---"
             echo ""
-            echo "**本次更新包含 $commit_count 个提交**"
-            
+            echo "**统计信息**"
+            echo "- 📊 总提交数: $total_count"
+            echo "- ✅ 功能/修复提交: $included_count"
+            echo "- 🔧 CI/维护提交: $filtered_count (已过滤)"
+
           } > changelog.md
+          
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo "📋 生成的更新日志预览："
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          cat changelog.md
+          echo "━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━"
+          echo ""
           
           # 输出到 GitHub Actions
           {
